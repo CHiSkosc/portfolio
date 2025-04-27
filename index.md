@@ -6,16 +6,16 @@
 
 [IS6812 EDA](/files/EDA_TinaYoung.html)
 Exploring the chosen company Home Credit Default Risk for the class project
-#<img src="images/dummy_thumbnail.jpg?raw=true"/>
+
 
 ---
 [IS6812 Individual Modeling](/files/individual model.Rmd)
 Self review for the analytical details of the Home Credit Default Risk project. Including cleaning data and minimal visualizations
-#<img src="images/dummy_thumbnail.jpg?raw=true"/>
+
 
 ---
 [Project 3 Title](http://example.com/)
-<img src="images/dummy_thumbnail.jpg?raw=true"/>
+
 
 ---
 
