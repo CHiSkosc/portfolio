@@ -4,7 +4,7 @@
 
 ### Student Projects
 
-[Project 1 Title](/sample_page)
+[IS6812 Modeling](/sample_page)
 <img src="images/dummy_thumbnail.jpg?raw=true"/>
 
 ---
