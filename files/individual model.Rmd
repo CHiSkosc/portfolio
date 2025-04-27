@@ -1,0 +1,408 @@
+---
+title: "individual model"
+author: "Tina Young"
+Date: "'r Sys.Date()'"
+output:
+  html_document:
+    toc: true
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message= F, warning = F)
+library(tidyverse)
+library(dplyr)
+library(randomForest)
+```
+
+# Introduction: 
+Kaggle Project - Home Credit Default Risk
+This file will explore different modeling ideas that can cover the variety of datasets that Home Credit has provided. 
+
+# Data
+## Loading 
+```{r}
+#Loading the datasets that Home Credit provided
+app_train <- read.csv("C:\\Users\\young\\OneDrive\\Documents\\Masters\\Spring 2025\\IS 6812 - Capstone 2\\kaggle\\kaggle data\\application_train.csv")
+cbu <- read.csv("C:\\Users\\young\\OneDrive\\Documents\\Masters\\Spring 2025\\IS 6812 - Capstone 2\\kaggle\\kaggle data\\bureau.csv")
+cbu_balance <-read.csv("C:\\Users\\young\\OneDrive\\Documents\\Masters\\Spring 2025\\IS 6812 - Capstone 2\\kaggle\\kaggle data\\bureau_balance.csv")
+cc_balance <-read.csv("C:\\Users\\young\\OneDrive\\Documents\\Masters\\Spring 2025\\IS 6812 - Capstone 2\\kaggle\\kaggle data\\credit_card_balance.csv")
+install_payments <-read.csv("C:\\Users\\young\\OneDrive\\Documents\\Masters\\Spring 2025\\IS 6812 - Capstone 2\\kaggle\\kaggle data\\installments_payments.csv")
+pos_cash_bal <-read.csv("C:\\Users\\young\\OneDrive\\Documents\\Masters\\Spring 2025\\IS 6812 - Capstone 2\\kaggle\\kaggle data\\POS_CASH_balance.csv")
+prev_app <-read.csv("C:\\Users\\young\\OneDrive\\Documents\\Masters\\Spring 2025\\IS 6812 - Capstone 2\\kaggle\\kaggle data\\previous_application.csv")
+
+#app_test not yet loaded here to use for later
+app_test <- read.csv("C:\\Users\\young\\OneDrive\\Documents\\Masters\\Spring 2025\\IS 6812 - Capstone 2\\kaggle\\kaggle data\\application_test.csv")
+```
+
+## Review
+Much of the data has NA or missing values
+```{r}
+#sl
+app_train |>
+  summarize_all(funs(sum(is.na(.)) / length(.)))
+```
+```{r}
+#ty
+na <- colSums(is.na(app_train))
+na[na > 0]
+```
+
+```{r}
+#ty
+app_train |>
+  select(where(is.character)) |>
+  map_df(~ sum(is.na(.) | . == "", na.rm = TRUE)) |> #searching for blank or NA values
+  pivot_longer(cols = everything(), names_to = "column", values_to = "blank_count") |>
+  filter(blank_count > 0)
+```
+## Cleaning App_train
+Removing unnecessary columns due to size of data 
+df <- df %>% select(-c(column1, column2))  # Remove multiple columns
+```{r}
+#Copy of original data
+clean_app_train <- app_train
+
+clean_app_train <- clean_app_train %>%
+  select(-c(CNT_CHILDREN, DAYS_ID_PUBLISH, FLAG_MOBIL, FLAG_EMP_PHONE, FLAG_WORK_PHONE, FLAG_CONT_MOBILE, FLAG_PHONE, FLAG_EMAIL, CNT_FAM_MEMBERS, REGION_RATING_CLIENT, REGION_RATING_CLIENT_W_CITY, HOUR_APPR_PROCESS_START, REG_REGION_NOT_LIVE_REGION, 
+REG_REGION_NOT_WORK_REGION, LIVE_REGION_NOT_WORK_REGION, REG_CITY_NOT_LIVE_CITY, REG_CITY_NOT_WORK_CITY, LIVE_CITY_NOT_WORK_CITY, APARTMENTS_AVG, BASEMENTAREA_AVG, YEARS_BEGINEXPLUATATION_AVG, YEARS_BUILD_AVG, COMMONAREA_AVG, ELEVATORS_AVG, ENTRANCES_AVG, FLOORSMAX_AVG, FLOORSMIN_AVG, LANDAREA_AVG, LIVINGAPARTMENTS_AVG, LIVINGAREA_AVG, NONLIVINGAPARTMENTS_AVG, NONLIVINGAREA_AVG, APARTMENTS_MODE, BASEMENTAREA_MODE, YEARS_BEGINEXPLUATATION_MODE, YEARS_BUILD_MODE, COMMONAREA_MODE, ELEVATORS_MODE, ENTRANCES_MODE, FLOORSMAX_MODE, FLOORSMIN_MODE, LANDAREA_MODE, LIVINGAPARTMENTS_MODE, LIVINGAREA_MODE, NONLIVINGAPARTMENTS_MODE, NONLIVINGAREA_MODE, APARTMENTS_MEDI, BASEMENTAREA_MEDI, YEARS_BEGINEXPLUATATION_MEDI, YEARS_BUILD_MEDI, COMMONAREA_MEDI, ELEVATORS_MEDI, ENTRANCES_MEDI, FLOORSMAX_MEDI, FLOORSMIN_MEDI, LANDAREA_MEDI, LIVINGAPARTMENTS_MEDI, LIVINGAREA_MEDI, NONLIVINGAPARTMENTS_MEDI, NONLIVINGAREA_MEDI, FONDKAPREMONT_MODE, HOUSETYPE_MODE, TOTALAREA_MODE, WALLSMATERIAL_MODE, EMERGENCYSTATE_MODE, DAYS_LAST_PHONE_CHANGE, FLAG_DOCUMENT_2, FLAG_DOCUMENT_3, FLAG_DOCUMENT_4, FLAG_DOCUMENT_5, FLAG_DOCUMENT_6, FLAG_DOCUMENT_7, FLAG_DOCUMENT_8, FLAG_DOCUMENT_9, FLAG_DOCUMENT_10, FLAG_DOCUMENT_11, FLAG_DOCUMENT_12, FLAG_DOCUMENT_13, FLAG_DOCUMENT_14, FLAG_DOCUMENT_15, FLAG_DOCUMENT_16, FLAG_DOCUMENT_17, FLAG_DOCUMENT_18, FLAG_DOCUMENT_19, FLAG_DOCUMENT_20, FLAG_DOCUMENT_21, AMT_REQ_CREDIT_BUREAU_YEAR, WEEKDAY_APPR_PROCESS_START, NAME_FAMILY_STATUS, OBS_30_CNT_SOCIAL_CIRCLE, OBS_60_CNT_SOCIAL_CIRCLE, NAME_HOUSING_TYPE, AMT_REQ_CREDIT_BUREAU_QRT, NAME_INCOME_TYPE, CODE_GENDER, NAME_EDUCATION_TYPE, AMT_REQ_CREDIT_BUREAU_MON, NAME_TYPE_SUITE, DEF_30_CNT_SOCIAL_CIRCLE, FLAG_OWN_CAR, DEF_60_CNT_SOCIAL_CIRCLE, FLAG_OWN_REALTY, AMT_REQ_CREDIT_BUREAU_DAY, NAME_CONTRACT_TYPE, AMT_REQ_CREDIT_BUREAU_WEEK, AMT_REQ_CREDIT_BUREAU_HOUR))
+```
+
+
+```{r}
+
+#Using the copy for cleaning and saving, staring here will be cleaning for the character data with blank fields
+redistribute_blanks <- function(clean_app_train, column_name) {
+  #remove blank values to calculate proportions
+  non_blank_app_train <- clean_app_train %>% filter(!!sym(column_name) != "")
+  
+  #Calculate proportions of each non-blank category
+  proportions <- non_blank_app_train %>%
+    count(!!sym(column_name)) %>%
+    mutate(Prop = n/sum(n)) #proportion of each category
+  
+  #Number of blank values to redistribute
+  blank_count <- nrow(clean_app_train %>% filter(!!sym(column_name) == ""))
+  
+  #Assign blank value proportionally
+  set.seed(123) #repoducability 
+  
+  clean_app_train[[column_name]][clean_app_train[[column_name]] == ""] <- sample(
+    proportions[[column_name]], 
+    blank_count, 
+    replace = TRUE, 
+    prob = proportions$Prop
+  )
+  
+  return(clean_app_train)
+}
+#applying the function to select columns, applying to the character columns that had missing or blank data
+columns_to_process <- c("OCCUPATION_TYPE")
+
+for (column in columns_to_process) {
+  print(paste("Processing column:", column))  # Debugging step
+  clean_app_train <- redistribute_blanks(clean_app_train, column)
+}
+```
+
+
+
+
+```{r}
+# Handling values for the numeric and integer data types where they have NA values (using clean_app_train as it has already been partially cleaned) 
+# Function to apply proportional filling to multiple columns
+proportional_fill_multiple_cols <- function(clean_app_train, column_names) {
+  
+  # Loop through each column name
+  for (column_name in column_names) {
+    print(paste("Processing column:", column_name))  # Debugging output
+    
+    # Count number of missing (NA) values
+    num_na <- sum(is.na(clean_app_train[[column_name]]))
+    
+    # Existing values (non-missing)
+    num_values <- clean_app_train[[column_name]][!is.na(clean_app_train[[column_name]])]
+    
+    if (length(num_values) > 0 && num_na > 0) {
+      # Get the probability distribution of existing values
+      value_counts <- table(num_values)  # Frequency of unique values
+      proportions <- value_counts / sum(value_counts)  # Convert to proportions
+      
+      # Sampling missing values based on proportions
+      set.seed(123)  # For reproducibility
+      sampled_values <- sample(
+        as.numeric(names(proportions)),  # Convert names back to numeric
+        size = num_na, 
+        replace = TRUE, 
+        prob = proportions
+      )
+      
+      # Replace NA values with sampled values
+      clean_app_train[[column_name]][is.na(clean_app_train[[column_name]])] <- sampled_values
+      
+      print(paste("Updated column:", column_name, "- Filled NAs:", num_na))
+    } else {
+      print(paste("No valid values to sample from for column:", column_name))
+    }
+  }
+  
+  return(clean_app_train)
+}
+#applying function
+num_columns_to_process <- names(which(colSums(is.na(clean_app_train)) > 0))
+
+for (column in num_columns_to_process) {
+  clean_app_train <- proportional_fill_multiple_cols(clean_app_train, column)
+}
+```
+
+```{r}
+length(clean_app_train) #counting number of columns after cleaning
+
+```
+## Cleaning Bureau (cbu) data
+```{r}
+#Copy of original data
+clean_cbu <- cbu #cbu only has numeric columns that are missing values
+
+clean_cbu <- clean_cbu %>%
+  select(-c(AMT_CREDIT_MAX_OVERDUE, AMT_CREDIT_SUM_DEBT, AMT_CREDIT_SUM_LIMIT, DAYS_CREDIT_UPDATE, AMT_CREDIT_SUM_DEBT,
+AMT_ANNUITY, CREDIT_ACTIVE, AMT_CREDIT_SUM_LIMIT, AMT_CREDIT_MAX_OVERDUE, CNT_CREDIT_PROLONG, CREDIT_CURRENCY, CREDIT_DAY_OVERDUE, AMT_CREDIT_SUM_OVERDUE))
+```
+
+
+
+```{r}
+summary(clean_cbu)
+na_cbu <- colSums(is.na(clean_cbu))
+na_cbu[clean_cbu > 0]
+
+```
+
+```{r}
+summary(clean_cbu)
+```
+
+
+CBU update fixes
+```{r}
+## should have had duplicate with unessecary colomuns already removed clean_cbu <- cbu
+
+# Function to apply proportional filling to multiple columns
+proportional_fill_multiple_cols_Cbu <- function(clean_cbu, column_names) {
+  
+  # Loop through each column name
+  for (column_name in column_names) {
+    print(paste("Processing column:", column_name))  # Debugging output
+    
+    # Count number of missing (NA) values
+    num_na_cbu <- sum(is.na(clean_cbu[[column_name]]))
+    
+    # Existing values (non-missing)
+    num_values_cbu <- clean_cbu[[column_name]][!is.na(clean_cbu[[column_name]])]
+    
+    if (length(num_values_cbu) > 0 && num_na_cbu > 0) {
+      # Get the probability distribution of existing values
+      value_counts_cbu <- table(num_values_cbu)  # Frequency of unique values
+      proportions_cbu <- value_counts_cbu / sum(value_counts_cbu)  # Convert to proportions
+      
+      # Sampling missing values based on proportions
+      set.seed(123)  # For reproducibility
+      sampled_values_cbu <- sample(
+        as.numeric(names(proportions)),  # Convert names back to numeric
+        size = num_na, 
+        replace = TRUE, 
+        prob = proportions
+      )
+      
+      # Replace NA values with sampled values
+      clean_cbu[[column_name]][is.na(clean_cbu[[column_name]])] <- sampled_values_cbu
+      
+      print(paste("Updated column:", column_name, "- Filled NAs:", num_na_cbu))
+    } else {
+      print(paste("No valid values to sample from for column:", column_name))
+    }
+  }
+  
+  return(clean_cbu)
+}
+#applying function
+num_columns_to_process_cbu <- names(which(colSums(is.na(clean_cbu)) > 0))
+
+for (column in num_columns_to_process_cbu) {
+  print(paste("Processing column:", column)) #Debugging
+  clean_cbu <- proportional_fill_multiple_cols(clean_cbu, column)
+}
+
+```
+
+
+```{r}
+summary(clean_cbu)
+```
+
+
+```{r}
+library(randomForest)
+```
+
+```{r}
+set.seed(123)
+cbr_train_size <-createDataPartition(clean_cbu)
+
+```
+
+
+
+```{r}
+library(caret)
+set.seed(123)
+train_size <-createDataPartition(clean_app_train$TARGET, p=0.01, list=FALSE) #searching for 20% of the data
+
+cat_train <-clean_app_train[train_size, ]
+```
+
+Testing random forest with smaller grouping
+```{r}
+library(randomForest)
+
+set.seed(123)
+rf_model <- randomForest(TARGET ~., data=cat_train, imporance=TRUE)
+
+#Get the variables importance
+importance(rf_model)
+varImpPlot(rf_model)
+```
+Top columns to continue with, maybe also take the remaining columns (that didn't get top 8 slots) to 
+EXT_SOURCE_3 (19.55)
+EXT_SOURCE_2 (19.34)
+EXT_SOURCE_1 (16.65)
+DAYS_BIRTH (12.63)
+DAYS_REGISTRATION (12.27)
+DAYS_EMPLOYED (11.04)
+OWN_CAR_AGE (8.45)
+AMT_CREDIT (8.44)
+
+```{r}
+#reducing size of cbu for random forest testing  --cauesd 'too large error'
+
+
+set.seed(123)
+cbu_train_size <-createDataPartition(clean_cbu)
+
+library(caret)
+set.seed(123)
+cbu_train_size <-createDataPartition(clean_cbu$TARGET, p=0.01, list=FALSE) #searching for 1% of the data
+
+b_train <-cbu_train_size[cbu_train_size, ]
+```
+
+```{r}
+library(dplyr)
+
+set.seed(123)
+cbu_sample <- clean_cbu %>%
+  sample_frac(0.01)
+
+nrow(cbu_sample)
+```
+```{r}
+set.seed(123)
+b_rf_model <- randomForest(CNT_CREDIT_PROLONG ~., data=cbu_sample, imporance=TRUE)
+
+#Get the variables importance
+importance(b_rf_model)
+varImpPlot(b_rf_model)
+```
+
+```{r}
+#if cnt_credit_prolong is more important variable
+# Find the most important variable
+important_vars <- importance(b_rf_model)
+most_important_var <- rownames(important_vars)[which.max(important_vars[, 1])]
+print(most_important_var)
+
+
+```
+
+```{r}
+set.seed(123)
+b_rf_model2 <- randomForest(DAYS_CREDIT_ENDDATE ~., data=cbu_sample, imporance=TRUE)
+
+#Get the variables importance
+importance(b_rf_model2)
+varImpPlot(b_rf_model2)
+```
+## bureau_balance
+```{r}
+summary(cbu_balance) #no NAs, will continue to narrow down size for testing models. 
+```
+```{r}
+#create copy
+clean_bur_balance <- cbu_balance
+```
+
+
+```{r}
+library(dplyr)
+
+set.seed(123)
+bur_bal_sample <- clean_bur_balance %>%
+  sample_frac(0.01)
+
+nrow(bur_bal_sample) #sample is almost 300K, may need to reduce it more
+```
+bureau_balance has no missing values
+```{r}
+bb_rf_model <- randomForest(MONTHS_BALANCE ~.,data=bur_bal_sample)
+
+#variable importance
+importance(bb_rf_model)
+varImpPlot(bb_rf_model)
+```
+* combining bureau and bureau_balance tables, and automatically dropping rows that do not appear in bureau before conditioning
+```{r}
+combined_bureau <- clean_cbu %>%
+  inner_join(cbu_balance, by = "SK_ID_BUREAU")
+
+dim(combined_bureau) #counts rows and columns
+
+head(combined_bureau) #heads new data 
+```
+
+## Combining the combined_bureau and app_train data **this is pre clean? 
+```{r}
+comb_apptrain_bureau <- clean_app_train %>%
+  inner_join(combined_bureau, by = "SK_ID_CURR")
+
+dim(comb_apptrain_bureau)
+```
+
+```{r}
+set.seed(123)
+apptrain_bureau_50ksample <- sample_n(comb_apptrain_bureau, 50000)
+```
+
+
+
+
+
+
+
+
+
+
+#randomForest with the combined bureau
+```{r}
+#pulling sample of combined bureau
+set.seed(123)
+bur_sample <- combined_bureau %>%
+  sample_frac(0.0011)
+
+nrow(bur_sample)
+``` 
+
+```{r}
+
+```
+

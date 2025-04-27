@@ -1,0 +1,477 @@
+---
+title: "EDA_TinaYoung"
+author: "Tina Young"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message= F, warning = F)
+library(tidyverse)
+library(dplyr)
+library(ggcorrplot)
+library(ggplot2)
+```
+
+# EDA Introduction
+This document will cover details regarding the data for Kaggle Home Credit Default Risk project. Details will include descriptions of the available data as well as some concerns and initial findings of the data. 
+
+## Project questions
+* How will my imputation of data affect predictions? 
+* Any outliers in the data? 
+* Are there columns that have multicollinearity? 
+* What types of visualizations will best represent initial observations of the data? 
+* Will the size of the merged file be an increase in complexity in the project? 
+* How will having big data files affect processing times? Are there ways to mitigated this issue? 
+
+
+## The Data
+```{r}
+
+app_train <- read.csv("C:\\Users\\young\\OneDrive\\Documents\\Masters\\Spring 2025\\IS 6812 - Capstone 2\\kaggle\\kaggle data\\application_train.csv")
+
+cbu <- read.csv("C:\\Users\\young\\OneDrive\\Documents\\Masters\\Spring 2025\\IS 6812 - Capstone 2\\kaggle\\kaggle data\\bureau.csv")
+
+prev_app <- read.csv("C:\\Users\\young\\OneDrive\\Documents\\Masters\\Spring 2025\\IS 6812 - Capstone 2\\kaggle\\kaggle data\\previous_application.csv")
+
+
+```
+
+### Application_train file 
+#### Summary views and confirmation of columns with missing or NA data
+```{r}
+#standard summary of app_train file
+summary(app_train)
+```
+A list of non-character columns with missing data
+```{r}
+na <- colSums(is.na(app_train))
+na[na > 0]
+```
+This is helpful see only the numerical or integer columns of the data has NA values. For these data type columns missing data affects up to 10% of the total rows in the data. 
+
+
+Reviewed the character data columns to see if they have NA or blank data. 
+```{r}
+app_train1 <- app_train |>
+  select(where(is.character)) |>
+  map_df(~ sum(is.na(.) | . == "", na.rm = TRUE)) |> #searching for blank or NA values
+  pivot_longer(cols = everything(), names_to = "column", values_to = "blank_count") |>
+  filter(blank_count > 0)
+
+app_train1
+```
+These 6 columns have blank or NA in the values as shown out of 307,511 rows. After visually reviewing the columns it is determined that the cells were blank. Due to the size of missing/blank cells with the highest percentage of blank at 68%. 
+
+#### Application_Train Data observations
+Between all types of data there are 64 columns that have missing data. Lowest amount of data is 0.0026% and the highest is 68% missing data between a single column. Because of the high volume of data missing imputing values to match the proportions of the available values to fill in the missing with what is available but not go with the median/mode values. 
+
+Additionally, columns FLAG_OWN_CAR and OWN_CAR_AGE having a dependency that if Y would have a numerical value and if N the cell was blank. With this need to be aware and decide how to impute this to be clear on the meaning. The oldest car age is listed as 91. 
+
+#### Application_Train file Cleaning
+Updating the character columns so that the missing values will proportionally be updated to match what values are available. 
+```{r}
+#Copy of original data
+clean_app_train <- app_train
+#Using the copy for cleaning and saving, staring here will be cleaning for the character data with blank fields
+redistribute_blanks <- function(clean_app_train, column_name) {
+  #remove blank values to calculate proportions
+  non_blank_app_train <- clean_app_train %>% filter(!!sym(column_name) != "")
+  
+  #Calculate proportions of each non-blank category
+  proportions <- non_blank_app_train %>%
+    count(!!sym(column_name)) %>%
+    mutate(Prop = n/sum(n)) #proportion of each category
+  
+  #Number of blank values to redistribute
+  blank_count <- nrow(clean_app_train %>% filter(!!sym(column_name) == ""))
+  
+  #Assign blank value proportionally
+  set.seed(123) #repeatable 
+  
+  clean_app_train[[column_name]][clean_app_train[[column_name]] == ""] <- sample(
+    proportions[[column_name]], 
+    blank_count, 
+    replace = TRUE, 
+    prob = proportions$Prop
+  )
+  
+  return(clean_app_train)
+}
+#applying the function to select columns, applying to the character columns that had missing or blank data
+columns_to_process <- c("NAME_TYPE_SUITE", "OCCUPATION_TYPE", "FONDKAPREMONT_MODE", "HOUSETYPE_MODE", "WALLSMATERIAL_MODE", "EMERGENCYSTATE_MODE")
+
+for (column in columns_to_process) {
+  print(paste("Processing column:", column))  # Debugging step
+  clean_app_train <- redistribute_blanks(clean_app_train, column)
+}
+
+```
+
+For numbered data, first updated the OWN_CAR_AGE column by itself to ensure that the na values, that match up to the N flag continue to make sense. 
+```{r}
+clean_app_train <- clean_app_train |>
+  mutate(OWN_CAR_AGE = replace_na(data = OWN_CAR_AGE, replace = 999)) # Selecting to update to 999 as it is an out of place value that doesn't match existing values
+
+```
+
+The remainder numbered column types. Also imputing the missing values to be proportionally updated to what is already existing. 
+```{r}
+# Handling values for the numeric and integer data types where they have NA values (using clean_app_train as it has already been partially cleaned) 
+# Function to apply proportional filling to multiple columns
+proportional_fill_multiple_cols <- function(clean_app_train, column_names) {
+  
+  # Loop through each column name
+  for (column_name in column_names) {
+    print(paste("Processing column:", column_name))  # Debugging output
+    
+    # Count number of missing (NA) values
+    num_na <- sum(is.na(clean_app_train[[column_name]]))
+    
+    # Existing values (non-missing)
+    num_values <- clean_app_train[[column_name]][!is.na(clean_app_train[[column_name]])]
+    
+    if (length(num_values) > 0 && num_na > 0) {
+      # Get the probability distribution of existing values
+      value_counts <- table(num_values)  # Frequency of unique values
+      proportions <- value_counts / sum(value_counts)  # Convert to proportions
+      
+      # Sampling missing values based on proportions
+      set.seed(123)  # For reproducibility
+      sampled_values <- sample(
+        as.numeric(names(proportions)),  # Convert names back to numeric
+        size = num_na, 
+        replace = TRUE, 
+        prob = proportions
+      )
+      
+      # Replace NA values with sampled values
+      clean_app_train[[column_name]][is.na(clean_app_train[[column_name]])] <- sampled_values
+      
+      print(paste("Updated column:", column_name, "- Filled NAs:", num_na))
+    } else {
+      print(paste("No valid values to sample from for column:", column_name))
+    }
+  }
+  
+  return(clean_app_train)
+}
+#applying function
+num_columns_to_process <- names(which(colSums(is.na(clean_app_train)) > 0))
+
+for (column in num_columns_to_process) {
+  print(paste("Processing column:", column)) #Debuggin
+  clean_app_train <- proportional_fill_multiple_cols(clean_app_train, column)
+}
+```
+
+```{r}
+count_missing <- function(x) sum(is.na(x))
+
+clean_app_train |>
+  summarize_all(count_missing) |>
+  pivot_longer(cols = everything(), names_to = "column", values_to = "missing_count") |>
+  filter(missing_count > 0)
+```
+No more data is missing or NA. 
+
+**added for the presentation 4/5/25
+```{r}
+count_missing <- function(x) sum(is.na(x))
+
+app_train |>
+  summarize_all(count_missing) |>
+  pivot_longer(cols = everything(), names_to = "column", values_to = "missing_count") |>
+  filter(missing_count > 0)
+```
+
+
+#### Application Train visualizations
+Visual difference for counts of the TARGET variable
+```{r}
+ggplot(clean_app_train, aes(x = TARGET)) +
+  geom_histogram(binwidth = 0.5)+
+  labs(title="CleanData Target")
+```
+The count is showing that majority of clients are being marked as 0, for no late payments. 
+
+```{r}
+clean_app_compare <- clean_app_train |>
+  select(TARGET, EXT_SOURCE_1, EXT_SOURCE_2, EXT_SOURCE_3) |>
+  pivot_longer(cols = starts_with("EXT_SOURCE"), names_to = "Source", values_to = "Value")
+
+clean_app_compare |> 
+  ggplot(aes(x=Value, fill=factor(TARGET))) +
+  geom_density(alpha = 0.3) +
+  facet_wrap(~ Source, scales = "free") +
+  scale_fill_manual(values = c("0" = "lightblue", "1" = "red"), 
+                    labels = c("0" = "Non-Default", "1" = "Default")) +
+  labs(title = "EXT_Source Compar by Target (0vs1)", 
+       x = "Value", 
+       y = "Density", 
+       fill = "Target") +
+  theme_minimal()
+  
+```
+
+
+### Bureau data file
+#### Bureau Summary views and confirmation of columns with missing or NA data
+```{r}
+#standard summary of app_train file
+summary(cbu)
+```
+```{r}
+str(cbu)
+```
+
+A list of non-character columns with missing data
+```{r}
+na_cbu <- colSums(is.na(cbu))
+na_cbu[na_cbu > 0]
+```
+Reviewed the character data columns to see if they have NA or blank. None of the three columns that are character type have missing data. No need to impute these columns. 
+```{r}
+cbu1 <- cbu |>
+  select(where(is.character)) |>
+  map_df(~ sum(is.na(.) | . == "", na.rm = TRUE)) |> #searching for blank or NA values
+  pivot_longer(cols = everything(), names_to = "column", values_to = "blank_count") |>
+  filter(blank_count > 0)
+
+cbu1
+```
+
+#### Bureau file observations
+Less columns but more rows of data than the app_train file. The few character columns did not have missing data. While 7 numeric or integer data types have missing data/NA values. Based on the description for the columns, some being NA would make sense having an Active line wouldn't have an days credit end date, however, reviewing some of the active rows had negative values like in the closed rows. Due to this will be doing a proportional update for the missing values. 
+
+#### Bureau File Cleaning 
+Only the numeric or integer data types needed to be cleaned up. 
+```{r}
+#Creating copy of cbu
+cbu_clean <- cbu
+
+# Function to apply proportional filling to multiple columns
+proportional_fill_multiple_cols_Cbu <- function(cbu_clean, column_names) {
+  
+  # Loop through each column name
+  for (column_name in column_names) {
+    print(paste("Processing column:", column_name))  # Debugging output
+    
+    # Count number of missing (NA) values
+    num_na_cbu <- sum(is.na(cbu_clean[[column_name]]))
+    
+    # Existing values (non-missing)
+    num_values_cbu <- cbu_clean[[column_name]][!is.na(cbu_clean[[column_name]])]
+    
+    if (length(num_values_cbu) > 0 && num_na_cbu > 0) {
+      # Get the probability distribution of existing values
+      value_counts_cbu <- table(num_values_cbu)  # Frequency of unique values
+      proportions_cbu <- value_counts_cbu / sum(value_counts_cbu)  # Convert to proportions
+      
+      # Sampling missing values based on proportions
+      set.seed(123)  # For reproducibility
+      sampled_values_cbu <- sample(
+        as.numeric(names(proportions)),  # Convert names back to numeric
+        size = num_na, 
+        replace = TRUE, 
+        prob = proportions
+      )
+      
+      # Replace NA values with sampled values
+      cbu_clean[[column_name]][is.na(cbu_clean[[column_name]])] <- sampled_values_cbu
+      
+      print(paste("Updated column:", column_name, "- Filled NAs:", num_na_cbu))
+    } else {
+      print(paste("No valid values to sample from for column:", column_name))
+    }
+  }
+  
+  return(cbu_clean)
+}
+#applying function
+num_columns_to_process_cbu <- names(which(colSums(is.na(cbu_clean)) > 0))
+
+for (column in num_columns_to_process_cbu) {
+  print(paste("Processing column:", column)) #Debugging
+  cbu_clean <- proportional_fill_multiple_cols(cbu_clean, column)
+}
+
+```
+
+#### Bureau Visualizations
+```{r}
+cbu_clean |>
+  ggplot(aes(x=CREDIT_TYPE, y=AMT_CREDIT_SUM_OVERDUE)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "Credit Sum Overdue by Credit Type", 
+       x = "Credit Type", 
+       y = "Amt Credit Sum Overdue") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  coord_flip()
+```
+While not an ideal representation of box plot, this does show some categories in credit type have some outliers in sum overdue. 
+
+
+### Previous Applications Data File
+#### Summary and search for missing or NA count
+```{r}
+#standard summary of Previous Applications file
+summary(prev_app)
+```
+Pulling only the numeric or integer types with NA values. 
+```{r}
+na_prev_app <- colSums(is.na(prev_app))
+na_prev_app[na_prev_app > 0]
+```
+
+Checking the character data type columns for missing/NA values. 
+```{r}
+prevapp <- prev_app |>
+  select(where(is.character)) |>
+  map_df(~ sum(is.na(.) | . == "", na.rm = TRUE)) |> #searching for blank or NA values
+  pivot_longer(cols = everything(), names_to = "column", values_to = "blank_count") |>
+  filter(blank_count > 0)
+
+prevapp
+```
+Many of the number data type columns have another column with same number of NA values. Based on the description it makes sense that these columns would have same numbers of NA data. With the percentage of values missing in columns, recommend removing all but the Product combination and AMT_CREDIT columns. The Product_combination column should be able to be proportionally modified due to the smaller number of rows being affected at 0.021%. And the AMT_CREDIT column will be updated to match the median value. 
+
+#### Previous Application cleaning data
+Updating the data for cleaning
+```{r}
+clean_prev_app <- prev_app #updating data to be in the clean file
+
+```
+
+```{r}
+#Updating the PRODUCT_COMBINATION
+redist_blanks_prev_app <- function(clean_prev_app) {
+  column_name <- "PRODUCT_COMBINATION" 
+  
+  #Remove blank values to calculate the proportion
+  non_blank_prod_combo <- clean_prev_app %>%
+    filter(!!sym(column_name) !="")
+  
+  #Calculate proportions of each non-blank category
+  proportion_prevapp <- non_blank_prod_combo %>%
+    count(!!sym(column_name)) %>%
+    mutate(Prop = n/sum(n)) #proportion of each category
+  
+  #Number of blank values to redistribute
+  blank_count <- sum(clean_prev_app[[column_name]] == "")
+  
+  #Assign blank values
+  set.seed(123)
+  
+  clean_prev_app[[column_name]][clean_prev_app[[column_name]] == ""] <-sample(
+    proportion_prevapp[[column_name]], 
+    blank_count, 
+    replace = T, 
+    prob = proportion_prevapp$Prop
+  )
+  
+  return(clean_prev_app) 
+}
+
+#apply this function
+
+clean_prev_app <- redist_blanks_prev_app(clean_prev_app)
+```
+
+```{r}
+#Cleaning the AMT_CREDIT with median value for the single missing value
+clean_prev_app <- clean_prev_app |>
+  mutate(AMT_CREDIT = replace_na(AMT_CREDIT, median(AMT_CREDIT, na.rm = T)))
+
+
+```
+
+Confirmed the update processed, rows of blanks no longer displayed. 
+
+Removing the remaining columns in data file for cleaning. 
+```{r}
+#Removing columns with NAs in the data
+columns_to_remove <- c("AMT_ANNUITY", "AMT_DOWN_PAYMENT", "AMT_GOODS_PRICE", "RATE_DOWN_PAYMENT", "RATE_DOWN_PAYMENT", "RATE_INTEREST_PRIMARY", "RATE_INTEREST_PRIVILEGED", "CNT_PAYMENT", "DAYS_FIRST_DRAWING", "DAYS_FIRST_DUE", "DAYS_LAST_DUE_1ST_VERSION", "DAYS_LAST_DUE", "DAYS_TERMINATION", 'NFLAG_INSURED_ON_APPROVAL", "NAME_TYPE_SUITE')
+
+clean_prev_app <- clean_prev_app[, !(names(clean_prev_app) %in% columns_to_remove)]
+```
+
+#### Previous Application Visualizations
+```{r}
+ggplot(clean_prev_app, aes(x = NAME_CONTRACT_STATUS)) +
+  geom_bar() + 
+  labs(title="Clean Previous App - Contract Status")
+```
+
+
+## Joining Data files
+Joining the app_train, bureau and previous_applications data files. 
+Beginning the process by reviewing duplicate ID numbers for aggregation. 
+```{r}
+#Checking the Bureau and Previous Application files for duplicate 
+cbu_clean %>% 
+  group_by(SK_ID_CURR) %>%
+  summarise(count = n()) %>%
+  filter(count > 1) %>%
+  arrange(count)
+
+clean_prev_app %>%
+  group_by(SK_ID_CURR) %>%
+  summarise(count = n())%>%
+  filter(count >1)%>%
+  arrange(count)
+```
+Many SK_ID_CURR numbers are duplicates in both the Bureau and Previous Application files. 
+
+```{r}
+#Aggregating the Bureau clean file
+bureau_agg <- cbu_clean %>%
+  group_by(SK_ID_CURR) %>%
+  summarise(across(where(is.numeric), \(x) sum(x, na.rm = TRUE)),
+            across(where(is.character), ~paste(unique(.), collapse = ","))) 
+
+
+#Aggregation for Previous Application clean file
+prev_app_agg <- clean_prev_app %>%
+  group_by(SK_ID_CURR) %>%
+  summarise(across(where(is.numeric), \(x) sum(x, na.rm = TRUE)), 
+            across(where(is.character), ~paste(unique(.), collapse = ",")))
+
+```
+
+Joining the three data files after aggregation
+merged_data <- reduce(list(file1, file2, file3), full_join, by = "common_key")
+
+```{r}
+#Joining the files
+merged_data <- clean_app_train %>%
+  full_join(bureau_agg, by = "SK_ID_CURR") %>%
+  full_join(prev_app_agg, by = "SK_ID_CURR")
+  
+```
+
+
+### Exploring merged data
+Due to size of the original merged data, sampling the data for some initial analysis
+```{r}
+sample_merged <- merged_data %>%
+  sample_frac(0.1) #Sampling 10% of the data
+```
+
+```{r}
+#potential correlations of data
+sample_plot <- sample_merged %>%
+  lm(TARGET ~ CREDIT_TYPE, data = .)
+
+summary(sample_plot)
+
+library(broom)
+
+tidy(sample_plot)
+```
+#### Joined Data Explored Observations
+Finding ways to make reading outputs will be necessary as more columns are added. The above model output does show some ideas even with just a basice linear model there are some significant statistics for some of the different Credit Types including consumer credit and credit cards. 
+
